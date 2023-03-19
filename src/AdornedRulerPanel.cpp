@@ -29,10 +29,10 @@
 #include "AllThemeResources.h"
 #include "AudioIO.h"
 #include "widgets/BasicMenu.h"
+#include "Beats.h"
 #include "CellularPanel.h"
 #include "../images/Cursors.h"
 #include "HitTestResult.h"
-#include "Menus.h"
 #include "Prefs.h"
 #include "Project.h"
 #include "ProjectAudioIO.h"
@@ -50,12 +50,16 @@
 #include "prefs/TracksPrefs.h"
 #include "prefs/ThemePrefs.h"
 #include "toolbars/ToolBar.h"
+#include "toolbars/ToolManager.h"
 #include "tracks/ui/Scrubbing.h"
 #include "tracks/ui/TrackView.h"
 #include "widgets/AButton.h"
-#include "widgets/AudacityMessageBox.h"
+#include "AudacityMessageBox.h"
 #include "widgets/Grabber.h"
-#include "widgets/wxWidgetsWindowPlacement.h"
+#include "widgets/LinearUpdater.h"
+#include "widgets/BeatsFormat.h"
+#include "widgets/TimeFormat.h"
+#include "wxWidgetsWindowPlacement.h"
 
 #include <wx/dcclient.h>
 #include <wx/menu.h>
@@ -666,7 +670,9 @@ void AdornedRulerPanel::TrackPanelGuidelineOverlay::Draw(
 **********************************************************************/
 
 enum {
-   OnSyncQuickPlaySelID = 7000,
+   OnMinutesAndSecondsID = 7000,
+   OnBeatsAndMeasuresID,
+   OnSyncQuickPlaySelID,
    OnAutoScrollID,
    OnTogglePlayRegionID,
    OnClearPlayRegionID,
@@ -681,6 +687,8 @@ BEGIN_EVENT_TABLE(AdornedRulerPanel, CellularPanel)
    EVT_LEAVE_WINDOW(AdornedRulerPanel::OnLeave)
 
    // Context menu commands
+   EVT_MENU(OnMinutesAndSecondsID, AdornedRulerPanel::OnTimelineFormatChange)
+   EVT_MENU(OnBeatsAndMeasuresID, AdornedRulerPanel::OnTimelineFormatChange)
    EVT_MENU(OnSyncQuickPlaySelID, AdornedRulerPanel::OnSyncSelToQuickPlay)
    EVT_MENU(OnAutoScrollID, AdornedRulerPanel::OnAutoScroll)
    EVT_MENU(OnTogglePlayRegionID, AdornedRulerPanel::OnTogglePlayRegion)
@@ -1255,9 +1263,9 @@ AdornedRulerPanel::AdornedRulerPanel(AudacityProject* project,
    wxWindowID id,
    const wxPoint& pos,
    const wxSize& size,
-   ViewInfo *viewinfo)
-:  CellularPanel(parent, id, pos, size, viewinfo)
-, mProject(project)
+   ViewInfo *viewinfo
+)  : CellularPanel(parent, id, pos, size, viewinfo)
+   , mProject(project)
 {
    SetLayoutDirection(wxLayout_LeftToRight);
 
@@ -1280,9 +1288,11 @@ AdornedRulerPanel::AdornedRulerPanel(AudacityProject* project,
 
    mOuter = GetClientRect();
 
-   mRuler.SetUseZoomInfo(mLeftOffset, mViewInfo);
+   mBeatsAndMeasures = false;
+
+   mUpdater.SetData(mViewInfo, mLeftOffset);
+
    mRuler.SetLabelEdges( false );
-   mRuler.SetFormat( Ruler::TimeFormat );
 
    mTracks = &TrackList::Get( *project );
 
@@ -1345,6 +1355,9 @@ void AdornedRulerPanel::UpdatePrefs()
    }
 #endif
 #endif
+
+   RefreshTimelineFormat();
+   // Update();
 }
 
 void AdornedRulerPanel::ReCreateButtons()
@@ -1370,7 +1383,7 @@ void AdornedRulerPanel::ReCreateButtons()
 
    wxPoint position( 1, 0 );
 
-   Grabber * pGrabber = safenew Grabber(this, this->GetId());
+   Grabber * pGrabber = safenew Grabber(this, {});
    pGrabber->SetAsSpacer( true );
    //pGrabber->SetSize( 10, 27 ); // default is 10,27
    pGrabber->SetPosition( position );
@@ -2093,7 +2106,7 @@ void AdornedRulerPanel::StartQPPlay(
       newDefault = (loopEnabled && newDefault);
       if (newDefault)
          cutPreview = false;
-      auto options = DefaultPlayOptions( *mProject, newDefault );
+      auto options = ProjectAudioIO::GetDefaultOptions(*mProject, newDefault);
 
       if (!cutPreview) {
          if (pStartTime)
@@ -2230,6 +2243,20 @@ void AdornedRulerPanel::ShowMenu(const wxPoint & pos)
    const auto &playRegion = viewInfo.playRegion;
    wxMenu rulerMenu;
 
+   {
+      auto item = rulerMenu.AppendRadioItem(OnMinutesAndSecondsID,
+         _("Minutes and Seconds"));
+      item->Check(!mBeatsAndMeasures);
+   }
+
+   {
+      auto item = rulerMenu.AppendRadioItem(OnBeatsAndMeasuresID,
+         _("Beats and Measures"));
+      item->Check(mBeatsAndMeasures);
+   }
+
+   rulerMenu.AppendSeparator();
+
    auto pDrag = rulerMenu.AppendCheckItem(OnSyncQuickPlaySelID, _("Enable dragging selection"));
    pDrag->Check(mPlayRegionDragsSelection && playRegion.Active());
    pDrag->Enable(playRegion.Active());
@@ -2278,13 +2305,6 @@ void AdornedRulerPanel::ShowScrubMenu(const wxPoint & pos)
    );
 }
 
-void AdornedRulerPanel::OnSyncSelToQuickPlay(wxCommandEvent&)
-{
-   mPlayRegionDragsSelection = (mPlayRegionDragsSelection)? false : true;
-   gPrefs->Write(wxT("/QuickPlay/DragSelection"), mPlayRegionDragsSelection);
-   gPrefs->Flush();
-}
-
 void AdornedRulerPanel::DragSelection(AudacityProject &project)
 {
    auto &viewInfo = ViewInfo::Get( project );
@@ -2310,6 +2330,45 @@ void AdornedRulerPanel::HandleSnapping(size_t index)
    mIsSnapped[index] = results.Snapped();
 }
 
+void AdornedRulerPanel::RefreshTimelineFormat()
+{
+   if (mBeatsAndMeasures) {
+      mBeatsFormat.SetData(BeatsPerMinute.Read(),
+         UpperTimeSignature.Read(), LowerTimeSignature.Read());
+      mRuler.Invalidate();
+   }
+   else {
+      mRuler.SetFormat(&TimeFormat::Instance());
+   }
+   Refresh();
+}
+
+void AdornedRulerPanel::OnTimelineFormatChange(wxCommandEvent& event)
+{
+   int id = event.GetId();
+   bool changeFlag = mBeatsAndMeasures;
+   wxASSERT(id == OnMinutesAndSecondsID || id == OnBeatsAndMeasuresID);
+   mBeatsAndMeasures = (id == OnBeatsAndMeasuresID);
+   if (mBeatsAndMeasures) {
+      mBeatsFormat.SetData(BeatsPerMinute.Read(),
+         UpperTimeSignature.Read(), LowerTimeSignature.Read());
+      mRuler.Invalidate();
+      mRuler.SetFormat(&mBeatsFormat);
+   }
+   else {
+      mRuler.SetFormat(&TimeFormat::Instance());
+   }
+   if (changeFlag != mBeatsAndMeasures)
+      Refresh();
+}
+
+void AdornedRulerPanel::OnSyncSelToQuickPlay(wxCommandEvent&)
+{
+   mPlayRegionDragsSelection = (mPlayRegionDragsSelection) ? false : true;
+   gPrefs->Write(wxT("/QuickPlay/DragSelection"), mPlayRegionDragsSelection);
+   gPrefs->Flush();
+}
+
 #if 0
 void AdornedRulerPanel::OnTimelineToolTips(wxCommandEvent&)
 {
@@ -2318,6 +2377,7 @@ void AdornedRulerPanel::OnTimelineToolTips(wxCommandEvent&)
    gPrefs->Flush();
 }
 #endif
+
 
 void AdornedRulerPanel::OnAutoScroll(wxCommandEvent&)
 {
@@ -2452,6 +2512,14 @@ void AdornedRulerPanel::DoDrawMarks(wxDC * dc, bool /*text */ )
 
    mRuler.SetTickColour( theTheme.Colour( TimelineTextColor() ) );
    mRuler.SetRange( min, max, hiddenMin, hiddenMax );
+   if (mBeatsAndMeasures)
+   {
+      mRuler.SetTickLengths({ 5, 3, 1 });
+   }
+   else
+   {
+      mRuler.SetTickLengths({ 4, 2, 2 });
+   }
    mRuler.Draw( *dc );
 }
 
@@ -2576,8 +2644,11 @@ int AdornedRulerPanel::GetRulerHeight(bool showScrubBar)
 
 void AdornedRulerPanel::SetLeftOffset(int offset)
 {
-   mLeftOffset = offset;
-   mRuler.SetUseZoomInfo(offset, mViewInfo);
+   if (mLeftOffset != offset) {
+      mLeftOffset = offset;
+      mUpdater.SetData(mViewInfo, offset);
+      mRuler.Invalidate();
+   }
 }
 
 // Draws the scrubbing/seeking indicator.
@@ -2796,7 +2867,7 @@ void AdornedRulerPanel::TogglePinnedHead()
 {
    bool value = !TracksPrefs::GetPinnedHeadPreference();
    TracksPrefs::SetPinnedHeadPreference(value, true);
-   MenuManager::ModifyAllProjectToolbarMenus();
+   ToolManager::ModifyAllProjectToolbarMenus();
 
    auto &project = *mProject;
    // Update button image
@@ -2805,4 +2876,30 @@ void AdornedRulerPanel::TogglePinnedHead()
    auto &scrubber = Scrubber::Get( project );
    if (scrubber.HasMark())
       scrubber.SetScrollScrubbing(value);
+}
+
+// Attach menu item
+
+#include "commands/CommandContext.h"
+#include "commands/CommandManager.h"
+#include "CommonCommandFlags.h"
+
+namespace {
+void OnTogglePinnedHead(const CommandContext &context)
+{
+   AdornedRulerPanel::Get( context.project ).TogglePinnedHead();
+}
+
+using namespace MenuTable;
+using Options = CommandManager::Options;
+AttachedItem sAttachment{
+   { wxT("Transport/Other/Options/Part2"), { OrderingHint::Begin, {} } },
+   Command( wxT("PinnedHead"), XXO("Pinned Play/Record &Head (on/off)"),
+      OnTogglePinnedHead,
+      // Switching of scrolling on and off is permitted
+      // even during transport
+      AlwaysEnabledFlag,
+      Options{}.CheckTest([](const AudacityProject&){
+         return TracksPrefs::GetPinnedHeadPreference(); } ) )
+};
 }

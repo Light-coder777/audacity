@@ -19,8 +19,8 @@ Paul Licameli split from TrackPanel.cpp
 #include "../../../TrackPanelMouseEvent.h"
 #include "UndoManager.h"
 #include "ViewInfo.h"
-#include "../../../SelectionState.h"
-#include "../../../ProjectAudioIO.h"
+#include "SelectionState.h"
+#include "ProjectAudioIO.h"
 #include "../../../../images/Cursors.h"
 #include "../../../tracks/ui/TimeShiftHandle.h"
 

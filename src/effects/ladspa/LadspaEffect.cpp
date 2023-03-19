@@ -24,6 +24,7 @@ effects from this one class.
 
 
 #include "LadspaEffect.h"       // This class's header file
+#include "../EffectEditor.h"
 #include "SampleCount.h"
 #include "ConfigInterface.h"
 
@@ -40,7 +41,6 @@ effects from this one class.
 
 #include <wx/setup.h> // for wxUSE_* macros
 #include <wx/wxprec.h>
-#include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/dcclient.h>
 #include <wx/filename.h>
@@ -52,20 +52,19 @@ effects from this one class.
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/tokenzr.h>
-#include <wx/intl.h>
 #include <wx/scrolwin.h>
 #include <wx/version.h>
 
 #include "AudacityException.h"
 #include "FileNames.h"
-#include "../../ShuttleGui.h"
+#include "ShuttleGui.h"
 #include "../../widgets/NumericTextCtrl.h"
 #include "../../widgets/valnum.h"
-#include "../../widgets/wxPanelWrapper.h"
+#include "wxPanelWrapper.h"
 #include "ModuleManager.h"
 
 #if wxUSE_ACCESSIBILITY
-#include "../../widgets/WindowAccessible.h"
+#include "WindowAccessible.h"
 #endif
 
 // ============================================================================
@@ -396,7 +395,7 @@ LadspaEffectsModule::LoadPlugin(const PluginPath & path)
    wxString realPath = path.BeforeFirst(wxT(';'));
    path.AfterFirst(wxT(';')).ToLong(&index);
    auto result = std::make_unique<LadspaEffect>(realPath, (int)index);
-   result->FullyInitializePlugin();
+   result->InitializePlugin();
    return result;
 }
 
@@ -449,6 +448,11 @@ FilePaths LadspaEffectsModule::GetSearchPaths()
    return pathList;
 }
 
+namespace {
+bool LoadUseLatency(const EffectDefinitionInterface &effect);
+bool SaveUseLatency(const EffectDefinitionInterface &effect, bool value);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 // LadspaEffectOptionsDialog
@@ -458,8 +462,7 @@ FilePaths LadspaEffectsModule::GetSearchPaths()
 class LadspaEffectOptionsDialog final : public wxDialogWrapper
 {
 public:
-   LadspaEffectOptionsDialog(
-      wxWindow * parent, EffectDefinitionInterface &effect, bool &var);
+   explicit LadspaEffectOptionsDialog(const EffectDefinitionInterface &effect);
    virtual ~LadspaEffectOptionsDialog();
 
    void PopulateOrExchange(ShuttleGui & S);
@@ -467,8 +470,8 @@ public:
    void OnOk(wxCommandEvent & evt);
 
 private:
-   EffectDefinitionInterface &mEffect;
-   bool &mUseLatency;
+   const EffectDefinitionInterface &mEffect;
+   bool mUseLatency{};
 
    DECLARE_EVENT_TABLE()
 };
@@ -478,13 +481,11 @@ BEGIN_EVENT_TABLE(LadspaEffectOptionsDialog, wxDialogWrapper)
 END_EVENT_TABLE()
 
 LadspaEffectOptionsDialog::LadspaEffectOptionsDialog(
-   wxWindow * parent, EffectDefinitionInterface &effect, bool &var)
-: wxDialogWrapper(parent, wxID_ANY, XO("LADSPA Effect Options"))
-, mEffect{ effect }
-, mUseLatency{ var }
+   const EffectDefinitionInterface &effect
+)  : wxDialogWrapper{ nullptr, wxID_ANY, XO("LADSPA Effect Options") }
+   , mEffect{ effect }
+   , mUseLatency{ LoadUseLatency(mEffect) }
 {
-   mUseLatency = LadspaEffect::LoadUseLatency(effect);
-
    ShuttleGui S(this, eIsCreating);
    PopulateOrExchange(S);
 }
@@ -496,7 +497,8 @@ LadspaEffectOptionsDialog::~LadspaEffectOptionsDialog()
 static const wchar_t *OptionsKey = L"Options";
 static const wchar_t *UseLatencyKey = L"UseLatency";
 
-bool LadspaEffect::LoadUseLatency(const EffectDefinitionInterface &effect)
+namespace {
+bool LoadUseLatency(const EffectDefinitionInterface &effect)
 {
    bool result{};
    GetConfig(effect, PluginSettings::Shared,
@@ -504,11 +506,11 @@ bool LadspaEffect::LoadUseLatency(const EffectDefinitionInterface &effect)
    return result;
 }
 
-bool LadspaEffect::SaveUseLatency(
-   const EffectDefinitionInterface &effect, bool value)
+bool SaveUseLatency(const EffectDefinitionInterface &effect, bool value)
 {
    return SetConfig(
       effect, PluginSettings::Shared, OptionsKey, UseLatencyKey, value);
+}
 }
 
 void LadspaEffectOptionsDialog::PopulateOrExchange(ShuttleGui & S)
@@ -560,7 +562,7 @@ void LadspaEffectOptionsDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
    // the values, in this case mUseLatency
    PopulateOrExchange(S);
 
-   LadspaEffect::SaveUseLatency(mEffect, mUseLatency);
+   SaveUseLatency(mEffect, mUseLatency);
 
    EndModal(wxID_OK);
 }
@@ -896,18 +898,6 @@ bool LadspaEffect::InitializePlugin()
    return true;
 }
 
-bool LadspaEffect::FullyInitializePlugin()
-{
-   if (!InitializePlugin())
-      return false;
-
-   // Reading these values from the config file can't be done in the PluginHost
-   // process but isn't needed only for plugin discovery.
-
-   mUseLatency = LadspaEffect::LoadUseLatency(*this);
-   return true;
-}
-
 bool LadspaEffect::InitializeControls(LadspaEffectSettings &settings) const
 {
    auto &controls = settings.controls;
@@ -930,7 +920,7 @@ struct LadspaEffect::Instance
    : PerTrackEffect::Instance
    , EffectInstanceWithBlockSize
 {
-   using PerTrackEffect::Instance::Instance;
+   explicit Instance(const PerTrackEffect &processor);
    bool ProcessInitialize(EffectSettings &settings, double sampleRate,
       ChannelNames chanMap) override;
    bool ProcessFinalize() noexcept override;
@@ -966,7 +956,15 @@ struct LadspaEffect::Instance
 
    // Realtime processing
    std::vector<LADSPA_Handle> mSlaves;
+
+   const bool mUseLatency;
 };
+
+LadspaEffect::Instance::Instance(const PerTrackEffect &processor)
+   : PerTrackEffect::Instance{ processor }
+   , mUseLatency{ LoadUseLatency(processor) }
+{
+}
 
 std::shared_ptr<EffectInstance> LadspaEffect::MakeInstance() const
 {
@@ -978,7 +976,7 @@ auto LadspaEffect::Instance::GetLatency(
 {
    auto &effect = GetEffect();
    auto &controls = GetSettings(settings).controls;
-   if (effect.mUseLatency && effect.mLatencyPort >= 0)
+   if (mUseLatency && effect.mLatencyPort >= 0)
       return controls[effect.mLatencyPort];
    return 0;
 }
@@ -1117,8 +1115,9 @@ bool LadspaEffect::Instance::RealtimeProcessEnd(EffectSettings &) noexcept
    return true;
 }
 
-int LadspaEffect::ShowClientInterface(wxWindow &parent, wxDialog &dialog,
-   EffectUIValidator *, bool forceModal)
+int LadspaEffect::ShowClientInterface(const EffectPlugin &,
+   wxWindow &parent, wxDialog &dialog,
+   EffectEditor *, bool forceModal) const
 {
    dialog.Layout();
    dialog.Fit();
@@ -1187,15 +1186,11 @@ OptionalMessage LadspaEffect::LoadFactoryPreset(int, EffectSettings &) const
    return { nullptr };
 }
 
-// ============================================================================
-// EffectUIClientInterface Implementation
-// ============================================================================
-
-struct LadspaEffect::Validator : EffectUIValidator {
-   Validator(EffectUIClientInterface &effect,
+struct LadspaEffect::Editor : EffectEditor {
+   Editor(const EffectUIServices &effect,
       EffectSettingsAccess &access, double sampleRate, EffectType type,
       const LadspaEffectOutputs *pOutputs)
-      : EffectUIValidator{ effect, access }
+      : EffectEditor{ effect, access }
       , mSampleRate{ sampleRate }
       , mType{ type }
       // Copy settings
@@ -1218,7 +1213,7 @@ struct LadspaEffect::Validator : EffectUIValidator {
    void UpdateControls(const LadspaEffectSettings& src);
 
    const LadspaEffect &GetEffect()
-      { return static_cast<const LadspaEffect &>(mEffect); }
+      { return static_cast<const LadspaEffect &>(mUIServices); }
 
    const double mSampleRate;
    const EffectType mType;
@@ -1235,13 +1230,13 @@ struct LadspaEffect::Validator : EffectUIValidator {
    std::vector<LadspaEffectMeter *> mMeters;
 };
 
-bool LadspaEffect::Validator::UpdateUI()
+bool LadspaEffect::Editor::UpdateUI()
 {
    RefreshControls();
    return true;
 }
 
-void LadspaEffect::Validator::PopulateUI(ShuttleGui &S)
+void LadspaEffect::Editor::PopulateUI(ShuttleGui &S)
 {
    auto &effect = GetEffect();
    auto &controls = mSettings.controls;
@@ -1328,7 +1323,7 @@ void LadspaEffect::Validator::PopulateUI(ShuttleGui &S)
                mToggles[p]->SetName(labelText);
                mToggles[p]->SetValue(controls[p] > 0);
                BindTo(*mToggles[p],
-                  wxEVT_COMMAND_CHECKBOX_CLICKED, &Validator::OnCheckBox);
+                  wxEVT_COMMAND_CHECKBOX_CLICKED, &Editor::OnCheckBox);
                gridSizer->Add(mToggles[p], 0, wxALL, 5);
 
                gridSizer->Add(1, 1, 0);
@@ -1377,7 +1372,7 @@ void LadspaEffect::Validator::PopulateUI(ShuttleGui &S)
             mFields[p] = safenew wxTextCtrl(w, ID_Texts + p);
             mFields[p]->SetName(labelText);
             BindTo(*mFields[p],
-               wxEVT_COMMAND_TEXT_UPDATED, &Validator::OnTextCtrl);
+               wxEVT_COMMAND_TEXT_UPDATED, &Editor::OnTextCtrl);
             gridSizer->Add(mFields[p], 0, wxALIGN_CENTER_VERTICAL | wxALL, 5);
 
             wxString str;
@@ -1406,7 +1401,7 @@ void LadspaEffect::Validator::PopulateUI(ShuttleGui &S)
 #endif
             mSliders[p]->SetName(labelText);
             BindTo(*mSliders[p],
-               wxEVT_COMMAND_SLIDER_UPDATED, &Validator::OnSlider);
+               wxEVT_COMMAND_SLIDER_UPDATED, &Editor::OnSlider);
             gridSizer->Add(mSliders[p], 0, wxALIGN_CENTER_VERTICAL | wxEXPAND | wxALL, 5);
 
             if (hashi) {
@@ -1514,19 +1509,18 @@ void LadspaEffect::Validator::PopulateUI(ShuttleGui &S)
    mParent->SetMinSize({ -1, -1 });
 }
 
-std::unique_ptr<EffectUIValidator>
-LadspaEffect::PopulateOrExchange(ShuttleGui & S,
+std::unique_ptr<EffectEditor> LadspaEffect::MakeEditor(ShuttleGui & S,
    EffectInstance &, EffectSettingsAccess &access,
-   const EffectOutputs *pOutputs)
+   const EffectOutputs *pOutputs) const
 {
    auto pValues = static_cast<const LadspaEffectOutputs *>(pOutputs);
-   auto result = std::make_unique<Validator>(*this, access, mProjectRate,
+   auto result = std::make_unique<Editor>(*this, access, mProjectRate,
       GetType(), pValues);
    result->PopulateUI(S);
    return result;
 }
 
-bool LadspaEffect::Validator::ValidateUI()
+bool LadspaEffect::Editor::ValidateUI()
 {
    mAccess.ModifySettings([this](EffectSettings &settings){
       if (mType == EffectTypeGenerate)
@@ -1537,7 +1531,7 @@ bool LadspaEffect::Validator::ValidateUI()
    return true;
 }
 
-void LadspaEffect::Validator::Disconnect()
+void LadspaEffect::Editor::Disconnect()
 {
   for (auto &meter : mMeters)
      if (meter) {
@@ -1546,29 +1540,30 @@ void LadspaEffect::Validator::Disconnect()
      }
 }
 
-bool LadspaEffect::CanExportPresets()
+bool LadspaEffect::CanExportPresets() const
 {
    return false;
 }
 
-void LadspaEffect::ExportPresets(const EffectSettings &) const
+void LadspaEffect::ExportPresets(
+   const EffectPlugin &, const EffectSettings &) const
 {
 }
 
-OptionalMessage LadspaEffect::ImportPresets(EffectSettings &)
+OptionalMessage LadspaEffect::ImportPresets(
+   const EffectPlugin &, EffectSettings &) const
 {
    return { nullptr };
 }
 
-bool LadspaEffect::HasOptions()
+bool LadspaEffect::HasOptions() const
 {
    return true;
 }
 
-void LadspaEffect::ShowOptions()
+void LadspaEffect::ShowOptions(const EffectPlugin &) const
 {
-   LadspaEffectOptionsDialog dlg(mUIParent, *this, mUseLatency);
-   dlg.ShowModal();
+   LadspaEffectOptionsDialog{ *this }.ShowModal();
 }
 
 // ============================================================================
@@ -1700,7 +1695,7 @@ void LadspaEffect::FreeInstance(LADSPA_Handle handle) const
    mData->cleanup(handle);
 }
 
-void LadspaEffect::Validator::OnCheckBox(wxCommandEvent & evt)
+void LadspaEffect::Editor::OnCheckBox(wxCommandEvent & evt)
 {
    int p = evt.GetId() - ID_Toggles;
    // 0.5 is a half of the interval
@@ -1708,7 +1703,7 @@ void LadspaEffect::Validator::OnCheckBox(wxCommandEvent & evt)
    ValidateUI();
 }
 
-void LadspaEffect::Validator::OnSlider(wxCommandEvent & evt)
+void LadspaEffect::Editor::OnSlider(wxCommandEvent & evt)
 {
    int p = evt.GetId() - ID_Sliders;
 
@@ -1743,7 +1738,7 @@ void LadspaEffect::Validator::OnSlider(wxCommandEvent & evt)
    ValidateUI();
 }
 
-void LadspaEffect::Validator::OnTextCtrl(wxCommandEvent & evt)
+void LadspaEffect::Editor::OnTextCtrl(wxCommandEvent & evt)
 {
    int p = evt.GetId() - ID_Texts;
 
@@ -1775,7 +1770,7 @@ void LadspaEffect::Validator::OnTextCtrl(wxCommandEvent & evt)
    ValidateUI();
 }
 
-void LadspaEffect::Validator::RefreshControls()
+void LadspaEffect::Editor::RefreshControls()
 {
    if (!mParent)
       return;
@@ -1817,7 +1812,7 @@ void LadspaEffect::Validator::RefreshControls()
    }
 }
 
-void LadspaEffect::Validator::UpdateControl(int index, float value, float epsilon)
+void LadspaEffect::Editor::UpdateControl(int index, float value, float epsilon)
 {
    auto& controls = mSettings.controls;
 
@@ -1830,7 +1825,7 @@ void LadspaEffect::Validator::UpdateControl(int index, float value, float epsilo
    Publish({ size_t(index), value });
 }
 
-void LadspaEffect::Validator::UpdateControls(const LadspaEffectSettings& src)
+void LadspaEffect::Editor::UpdateControls(const LadspaEffectSettings& src)
 {
    const auto& data = *GetEffect().mData;
 

@@ -26,7 +26,8 @@ the pitch without changing the tempo.
 #endif
 
 #include "SoundTouchEffect.h"
-#include "../ShuttleAutomation.h"
+#include "ShuttleAutomation.h"
+#include <wx/weakref.h>
 
 class wxSlider;
 class wxChoice;
@@ -60,7 +61,7 @@ public:
 
    bool Process(EffectInstance &instance, EffectSettings &settings) override;
    bool CheckWhetherSkipEffect(const EffectSettings &settings) const override;
-   std::unique_ptr<EffectUIValidator> PopulateOrExchange(
+   std::unique_ptr<EffectEditor> PopulateOrExchange(
       ShuttleGui & S, EffectInstance &instance,
       EffectSettingsAccess &access, const EffectOutputs *pOutputs) override;
    bool TransferDataToWindow(const EffectSettings &settings) override;
@@ -111,6 +112,8 @@ private:
    void Update_Slider_PercentChange(); // Update control per current m_dPercentChange.
 
 private:
+   wxWeakRef<wxWindow> mUIParent{};
+
    bool mUseSBSMS;
    // effect parameters
    int    m_nFromPitch;          // per PitchIndex()

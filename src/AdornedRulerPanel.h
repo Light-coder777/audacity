@@ -11,15 +11,18 @@
 #ifndef __AUDACITY_ADORNED_RULER_PANEL__
 #define __AUDACITY_ADORNED_RULER_PANEL__
 
+#include "widgets/BeatsFormat.h"
 #include "CellularPanel.h"
 #include "widgets/Ruler.h" // member variable
+#include "widgets/LinearUpdater.h"
+#include "widgets/TimeFormat.h"
 #include "Observer.h"
 #include "Prefs.h"
 #include "ViewInfo.h" // for PlayRegion
 
 class AudacityProject;
 struct AudioIOEvent;
-struct SelectedRegionEvent;
+class LinearUpdater;
 class TrackList;
 
 // This is an Audacity Specific ruler panel.
@@ -133,7 +136,14 @@ private:
 
 private:
 
-   Ruler mRuler;
+   // Stateless formatter object, but not used by default...
+   BeatsFormat mBeatsFormat;
+
+   LinearUpdater mUpdater;
+
+   // ... Time formatter used by default instead
+   Ruler mRuler{ mUpdater, TimeFormat::Instance() };
+
    AudacityProject *const mProject;
    TrackList *mTracks;
 
@@ -164,6 +174,8 @@ private:
    void ShowScrubMenu(const wxPoint & pos);
    static void DragSelection(AudacityProject &project);
    void HandleSnapping(size_t index);
+   void RefreshTimelineFormat();
+   void OnTimelineFormatChange(wxCommandEvent& evt);
    void OnSyncSelToQuickPlay(wxCommandEvent &evt);
    //void OnTimelineToolTips(wxCommandEvent &evt);
    void OnAutoScroll(wxCommandEvent &evt);
@@ -174,6 +186,7 @@ private:
    void OnPinnedButton(wxCommandEvent & event);
    void OnTogglePinnedState(wxCommandEvent & event);
 
+   bool mBeatsAndMeasures;
    bool mPlayRegionDragsSelection;
    bool mTimelineToolTip;
 

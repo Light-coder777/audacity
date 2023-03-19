@@ -19,6 +19,7 @@ Paul Licameli split from ProjectManager.cpp
 #include "AudioIO.h"
 #include "BasicUI.h"
 #include "CommonCommandFlags.h"
+#include "DefaultPlaybackPolicy.h"
 #include "Menus.h"
 #include "Meter.h"
 #include "Mix.h"
@@ -36,11 +37,10 @@ Paul Licameli split from ProjectManager.cpp
 #include "ViewInfo.h"
 #include "WaveTrack.h"
 #include "toolbars/ToolManager.h"
-#include "prefs/TracksPrefs.h"
 #include "tracks/ui/Scrubbing.h"
 #include "tracks/ui/TrackView.h"
 #include "widgets/MeterPanelBase.h"
-#include "widgets/AudacityMessageBox.h"
+#include "AudacityMessageBox.h"
 
 
 static AudacityProject::AttachedObjects::RegisteredFactory
@@ -421,7 +421,7 @@ int ProjectAudioManager::PlayPlayRegion(const SelectedRegion &selectedRegion,
                return std::make_unique<CutPreviewPlaybackPolicy>(tless, diff);
             };
          token = gAudioIO->StartStream(
-            GetAllPlaybackTracks(TrackList::Get(*p), false, nonWaveToo),
+            TransportTracks{ TrackList::Get(*p), false, nonWaveToo },
             tcp0, tcp1, tcp1, myOptions);
       }
       else {
@@ -432,7 +432,7 @@ int ProjectAudioManager::PlayPlayRegion(const SelectedRegion &selectedRegion,
                t1 = latestEnd;
          }
          token = gAudioIO->StartStream(
-            GetAllPlaybackTracks( tracks, false, nonWaveToo ),
+            TransportTracks{ tracks, false, nonWaveToo },
             t0, t1, mixerLimit, options);
       }
       if (token != 0) {
@@ -481,7 +481,7 @@ void ProjectAudioManager::PlayCurrentRegion(bool newDefault /* = false */,
 
       if (newDefault)
          cutpreview = false;
-      auto options = DefaultPlayOptions( *p, newDefault );
+      auto options = ProjectAudioIO::GetDefaultOptions(*p, newDefault);
       if (cutpreview)
          options.envelope = nullptr;
       auto mode =
@@ -552,13 +552,14 @@ void ProjectAudioManager::Stop(bool stopStream /* = true*/)
       }
    }
 
-   const auto toolbar = ToolManager::Get( *project ).GetToolBar(ScrubbingBarID);
+   // To do: eliminate this, use an event instead
+   const auto toolbar = ToolManager::Get( *project ).GetToolBar(wxT("Scrub"));
    if (toolbar)
       toolbar->EnableDisableButtons();
 }
 
 
-WaveTrackArray ProjectAudioManager::ChooseExistingRecordingTracks(
+WritableSampleTrackArray ProjectAudioManager::ChooseExistingRecordingTracks(
    AudacityProject &proj, bool selectedOnly, double targetRate)
 {
    auto p = &proj;
@@ -587,7 +588,7 @@ WaveTrackArray ProjectAudioManager::ChooseExistingRecordingTracks(
 
    auto &trackList = TrackList::Get( *p );
    std::vector<unsigned> channelCounts;
-   WaveTrackArray candidates;
+   WritableSampleTrackArray candidates;
    const auto range = trackList.Leaders<WaveTrack>();
    for ( auto candidate : selectedOnly ? range + &Track::IsSelected : range ) {
       if (targetRate != RATE_NOT_SELECTED && candidate->GetRate() != targetRate)
@@ -651,8 +652,8 @@ void ProjectAudioManager::OnRecord(bool altAppearance)
       if (t1 == t0)
          t1 = DBL_MAX;
 
-      auto options = DefaultPlayOptions(*p);
-      WaveTrackArray existingTracks;
+      auto options = ProjectAudioIO::GetDefaultOptions(*p);
+      WritableSampleTrackArray existingTracks;
 
       // Checking the selected tracks: counting them and
       // making sure they all have the same rate
@@ -726,7 +727,7 @@ void ProjectAudioManager::OnRecord(bool altAppearance)
          // playback.
          /* TODO: set up stereo tracks if that is how the user has set up
           * their preferences, and choose sample format based on prefs */
-         transportTracks = GetAllPlaybackTracks(TrackList::Get( *p ), false, true);
+         transportTracks = TransportTracks{ TrackList::Get( *p ), false, true };
          for (const auto &wt : existingTracks) {
             auto end = transportTracks.playbackTracks.end();
             auto it = std::find(transportTracks.playbackTracks.begin(), end, wt);
@@ -1076,7 +1077,8 @@ void ProjectAudioManager::OnAudioIOStopRecording()
    }
 }
 
-void ProjectAudioManager::OnAudioIONewBlocks(const WaveTrackArray *tracks)
+void ProjectAudioManager::OnAudioIONewBlocks(
+   const WritableSampleTrackArray *tracks)
 {
    auto &project = mProject;
    auto &projectFileIO = ProjectFileIO::Get( project );
@@ -1153,16 +1155,14 @@ const ReservedCommandFlag&
       }
    }; return flag; }
 
-AudioIOStartStreamOptions
-DefaultPlayOptions( AudacityProject &project, bool newDefault )
-{
-   auto &projectAudioIO = ProjectAudioIO::Get( project );
-   AudioIOStartStreamOptions options { project.shared_from_this(),
-      ProjectRate::Get( project ).GetRate() };
-   options.captureMeter = projectAudioIO.GetCaptureMeter();
-   options.playbackMeter = projectAudioIO.GetPlaybackMeter();
-   options.envelope = Mixer::WarpOptions::DefaultWarp::Call(TrackList::Get(project));
-   options.listener = ProjectAudioManager::Get( project ).shared_from_this();
+//! Install an implementation in a library hook
+static ProjectAudioIO::DefaultOptions::Scope sScope {
+[](AudacityProject &project, bool newDefault) -> AudioIOStartStreamOptions {
+   //! Invoke the library default implemantation directly bypassing the hook
+   auto options = ProjectAudioIO::DefaultOptionsFactory()(project, newDefault);
+
+   //! Decorate with more info
+   options.listener = ProjectAudioManager::Get(project).shared_from_this();
    
    bool loopEnabled = ViewInfo::Get(project).playRegion.Active();
    options.loopEnabled = loopEnabled;
@@ -1174,7 +1174,7 @@ DefaultPlayOptions( AudacityProject &project, bool newDefault )
          const AudioIOStartStreamOptions &options)
             -> std::unique_ptr<PlaybackPolicy>
       {
-         return std::make_unique<NewDefaultPlaybackPolicy>( project,
+         return std::make_unique<DefaultPlaybackPolicy>( project,
             trackEndTime, loopEndTime,
             options.loopEnabled, options.variableSpeed);
       };
@@ -1184,12 +1184,12 @@ DefaultPlayOptions( AudacityProject &project, bool newDefault )
    }
 
    return options;
-}
+} };
 
 AudioIOStartStreamOptions
 DefaultSpeedPlayOptions( AudacityProject &project )
 {
-   auto result = DefaultPlayOptions( project );
+   auto result = ProjectAudioIO::GetDefaultOptions( project );
    auto gAudioIO = AudioIO::Get();
    auto PlayAtSpeedRate = gAudioIO->GetBestRate(
       false,     //not capturing
@@ -1197,32 +1197,6 @@ DefaultSpeedPlayOptions( AudacityProject &project )
       ProjectRate::Get( project ).GetRate()  //suggested rate
    );
    result.rate = PlayAtSpeedRate;
-   return result;
-}
-
-TransportTracks ProjectAudioManager::GetAllPlaybackTracks(
-   TrackList &trackList, bool selectedOnly, bool nonWaveToo)
-{
-   TransportTracks result;
-   {
-      auto range = trackList.Any< WaveTrack >()
-         + (selectedOnly ? &Track::IsSelected : &Track::Any );
-      for (auto pTrack: range)
-         result.playbackTracks.push_back(
-            pTrack->SharedPointer< WaveTrack >() );
-   }
-#ifdef EXPERIMENTAL_MIDI_OUT
-   if (nonWaveToo) {
-      auto range = trackList.Any< const PlayableTrack >() +
-         (selectedOnly ? &Track::IsSelected : &Track::Any );
-      for (auto pTrack: range)
-         if (!track_cast<const WaveTrack *>(pTrack))
-            result.otherPlayableTracks.push_back(
-               pTrack->SharedPointer< const PlayableTrack >() );
-   }
-#else
-   WXUNUSED(useMidi);
-#endif
    return result;
 }
 
@@ -1301,8 +1275,6 @@ void ProjectAudioManager::DoPlayStopSelect()
       PlayCurrentRegion(false);
    }
 }
-
-#include "CommonCommandFlags.h"
 
 static RegisteredMenuItemEnabler stopIfPaused{{
    []{ return PausedFlag(); },

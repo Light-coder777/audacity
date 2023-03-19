@@ -18,6 +18,7 @@ Paul Licameli split from AudacityProject.cpp
 #include "Menus.h"
 #include "Project.h"
 #include "ProjectAudioIO.h"
+#include "ProjectFileIO.h"
 #include "ProjectWindows.h"
 #include "ProjectStatus.h"
 #include "RefreshCode.h"
@@ -33,8 +34,8 @@ Paul Licameli split from AudacityProject.cpp
 #include "toolbars/ToolManager.h"
 #include "tracks/ui/Scrubbing.h"
 #include "tracks/ui/TrackView.h"
-#include "widgets/wxPanelWrapper.h"
-#include "widgets/WindowAccessible.h"
+#include "wxPanelWrapper.h"
+#include "WindowAccessible.h"
 
 #include "ThemedWrappers.h"
 
@@ -50,9 +51,9 @@ Paul Licameli split from AudacityProject.cpp
 namespace
 {
 #ifdef HAS_AUDIOCOM_UPLOAD
-   constexpr int DEFAULT_WINDOW_WIDTH = 1120;
+   constexpr int DEFAULT_WINDOW_WIDTH = 1180;
 #else
-   constexpr int DEFAULT_WINDOW_WIDTH = 1060;
+   constexpr int DEFAULT_WINDOW_WIDTH = 1120;
 #endif
    constexpr int DEFAULT_WINDOW_HEIGHT = 674;
 }
@@ -481,7 +482,7 @@ mutable -> unsigned {
 #endif
 
       wxCoord xTrackEnd = viewInfo.TimeToPosition( audioEndTime );
-      viewInfo.ZoomBy(pow(2.0, steps));
+      viewInfo.ZoomBy(pow(2.0, steps/4.0));
 
       double new_center_h = viewInfo.PositionToTime(xx, trackLeftEdge);
       viewInfo.h += (center_h - new_center_h);
@@ -696,6 +697,12 @@ ProjectWindow::ProjectWindow(wxWindow * parent, wxWindowID id,
 
    mThemeChangeSubscription =
       theTheme.Subscribe(*this, &ProjectWindow::OnThemeChange);
+
+   // Subscribe to title changes published by ProjectFileIO
+   mTitleChangeSubcription = ProjectFileIO::Get(project)
+      .Subscribe(*this, &ProjectWindow::OnProjectTitleChange);
+   // And also establish my initial consistency with it
+   this->OnProjectTitleChange(ProjectFileIOMessage::ProjectTitleChange);
 }
 
 ProjectWindow::~ProjectWindow()
@@ -770,12 +777,10 @@ void ProjectWindow::OnThemeChange(ThemeChangeMessage message)
       return;
    this->ApplyUpdatedTheme();
    auto &toolManager = ToolManager::Get( project );
-   for( int ii = 0; ii < ToolBarCount; ++ii )
-   {
-      ToolBar *pToolBar = toolManager.GetToolBar(ii);
+   toolManager.ForEach([](auto pToolBar){
       if( pToolBar )
          pToolBar->ReCreateButtons();
-   }
+   });
 }
 
 void ProjectWindow::UpdatePrefs()
@@ -1510,6 +1515,21 @@ void ProjectWindow::OnUndoReset()
 {
    HandleResize();
    // RedrawProject();  // Should we do this here too?
+}
+
+void ProjectWindow::OnProjectTitleChange(ProjectFileIOMessage message)
+{
+   if (message == ProjectFileIOMessage::ProjectTitleChange) {
+      auto pProject = FindProject();
+      if (!pProject)
+         return;
+      auto &project = *pProject;
+      const auto &name = ProjectFileIO::Get(project).GetProjectTitle();
+      if (name != GetTitle()) {
+         SetTitle(name);
+         SetName(name); // to make the nvda screen reader read the correct title
+      }
+   }
 }
 
 void ProjectWindow::OnScroll(wxScrollEvent & WXUNUSED(event))

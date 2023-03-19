@@ -16,16 +16,12 @@
 
 #include "LabelDialog.h"
 
-#include <wx/button.h>
 #include <wx/defs.h>
 #include <wx/choice.h>
 #include <wx/dc.h>
-#include <wx/dialog.h>
 #include <wx/grid.h>
-#include <wx/intl.h>
 #include <wx/scrolbar.h>
 #include <wx/settings.h>
-#include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textdlg.h>
 
@@ -37,10 +33,10 @@
 #include "SelectFile.h"
 #include "ViewInfo.h"
 #include "tracks/labeltrack/ui/LabelTrackView.h"
-#include "widgets/AudacityMessageBox.h"
-#include "widgets/AudacityTextEntryDialog.h"
+#include "AudacityMessageBox.h"
+#include "AudacityTextEntryDialog.h"
 #include "widgets/Grid.h"
-#include "widgets/HelpSystem.h"
+#include "HelpSystem.h"
 
 #include "FileNames.h"
 #include <limits>

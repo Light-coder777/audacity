@@ -30,13 +30,10 @@ It handles initialization and termination by subclassing wxApp.
 #include <wx/wxcrtvararg.h>
 #include <wx/defs.h>
 #include <wx/evtloop.h>
-#include <wx/app.h>
 #include <wx/bitmap.h>
 #include <wx/docview.h>
-#include <wx/event.h>
 #include <wx/ipc.h>
 #include <wx/window.h>
-#include <wx/intl.h>
 #include <wx/menu.h>
 #include <wx/snglinst.h>
 #include <wx/splash.h>
@@ -45,7 +42,6 @@ It handles initialization and termination by subclassing wxApp.
 #include <wx/fontmap.h>
 
 #include <wx/fs_zip.h>
-#include <wx/image.h>
 
 #include <wx/dir.h>
 #include <wx/file.h>
@@ -85,7 +81,6 @@ It handles initialization and termination by subclassing wxApp.
 #include "widgets/ASlider.h"
 #include "FFmpeg.h"
 #include "Journal.h"
-//#include "LangChoice.h"
 #include "Languages.h"
 #include "Menus.h"
 #include "PathList.h"
@@ -100,7 +95,6 @@ It handles initialization and termination by subclassing wxApp.
 #include "ProjectSettings.h"
 #include "ProjectWindow.h"
 #include "ProjectWindows.h"
-#include "Screenshot.h"
 #include "Sequence.h"
 #include "SelectFile.h"
 #include "TempDirectory.h"
@@ -112,17 +106,18 @@ It handles initialization and termination by subclassing wxApp.
 #include "AutoRecoveryDialog.h"
 #include "SplashDialog.h"
 #include "FFT.h"
-#include "widgets/AudacityMessageBox.h"
+#include "AudacityMessageBox.h"
 #include "prefs/DirectoriesPrefs.h"
 #include "prefs/GUISettings.h"
 #include "tracks/ui/Scrubbing.h"
 #include "FileConfig.h"
 #include "widgets/FileHistory.h"
-#include "widgets/wxWidgetsBasicUI.h"
+#include "wxWidgetsBasicUI.h"
 #include "LogWindow.h"
 #include "FrameStatisticsDialog.h"
 #include "PluginStartupRegistration.h"
 #include "IncompatiblePluginsDialog.h"
+#include "wxWidgetsWindowPlacement.h"
 
 #if defined(HAVE_UPDATES_CHECK)
 #  include "update/UpdateManager.h"
@@ -146,6 +141,8 @@ It handles initialization and termination by subclassing wxApp.
 
 #if defined(USE_BREAKPAD)
 #include "BreakpadConfigurer.h"
+#elif defined(USE_CRASHPAD)
+#include "CrashpadConfigurer.h"
 #endif
 
 #ifdef EXPERIMENTAL_SCOREALIGN
@@ -420,6 +417,13 @@ void PopulatePreferences()
          gPrefs->DeleteEntry("/GUI/Help");
    }
 
+   if(std::tuple{ vMajor, vMinor, vMicro } < std::tuple{ 3, 2, 3 })
+   {
+      // Reset Share Audio width if it was populated before 3.2.3
+      if(gPrefs->Exists("/GUI/ToolBars/Share Audio/W"))
+         gPrefs->DeleteEntry("/GUI/ToolBars/Share Audio/W");
+   }
+
    // write out the version numbers to the prefs file for future checking
    gPrefs->Write(wxT("/Version/Major"), AUDACITY_VERSION);
    gPrefs->Write(wxT("/Version/Minor"), AUDACITY_RELEASE);
@@ -428,33 +432,71 @@ void PopulatePreferences()
    gPrefs->Flush();
 }
 
-#if defined(USE_BREAKPAD)
-void InitBreakpad()
+void InitCrashreports()
 {
-    wxFileName databasePath;
-    databasePath.SetPath(FileNames::StateDir());
-    databasePath.AppendDir("crashreports");
-    databasePath.Mkdir(wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL);
+#if defined(USE_BREAKPAD) || defined(USE_CRASHPAD)
+   wxFileName databasePath;
+   databasePath.SetPath(FileNames::StateDir());
+   databasePath.AppendDir("crashreports");
+   databasePath.Mkdir(wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL);
     
-    if(databasePath.DirExists())
-    {   
-        const auto sentryRelease = wxString::Format(
-           "audacity@%d.%d.%d", AUDACITY_VERSION, AUDACITY_RELEASE, AUDACITY_REVISION
-        );
-        BreakpadConfigurer configurer;
-        configurer.SetDatabasePathUTF8(databasePath.GetPath().ToUTF8().data())
-            .SetSenderPathUTF8(wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath().ToUTF8().data())
+   if(databasePath.DirExists())
+   {
+      const auto sentryRelease = wxString::Format(
+         "audacity@%d.%d.%d", AUDACITY_VERSION, AUDACITY_RELEASE, AUDACITY_REVISION);
+#if defined(USE_BREAKPAD)
+      BreakpadConfigurer configurer;
+      configurer.SetDatabasePathUTF8(databasePath.GetPath().ToUTF8().data())
+         .SetSenderPathUTF8(wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath().ToUTF8().data())
     #if defined(CRASH_REPORT_URL)
-            .SetReportURL(CRASH_REPORT_URL)
+         .SetReportURL(CRASH_REPORT_URL)
     #endif
-            .SetParameters({
-                { "version", wxString(AUDACITY_VERSION_STRING).ToUTF8().data() },
-                { "sentry[release]",  sentryRelease.ToUTF8().data() }
-            })
-            .Start();
-    }
-}
+         .SetParameters({
+            { "version", wxString(AUDACITY_VERSION_STRING).ToUTF8().data() },
+            { "sentry[release]",  sentryRelease.ToUTF8().data() }
+         })
+         .Start();
+#elif defined(USE_CRASHPAD)
+      try
+      {
+         const auto executableDir = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath();
+         const wxFileName crashpadHandlerPath(executableDir, CRASHPAD_HANDLER_NAME);
+         const wxFileName crashreporterPath(executableDir, CRASHREPORTER_NAME);
+         const wxFileName metricsDir = databasePath;
+         std::vector<std::string> arguments = {
+            wxString::Format("--crashreporter-path=%s", crashreporterPath.GetFullPath()).ToUTF8().data(),
+#if defined(CRASH_REPORT_URL)
+            wxString::Format(
+               "--crashreporter-argument=-u=%s",
+               CRASH_REPORT_URL).ToUTF8().data(),
+            wxString::Format(
+               "--crashreporter-argument=-a=version=\"%s\",sentry[release]=\"%s\"",
+               AUDACITY_VERSION_STRING,
+               sentryRelease).ToUTF8().data()
 #endif
+         };
+         CrashpadConfigurer configurer;
+         configurer.SetHandlerPathUTF8(crashpadHandlerPath.GetFullPath().ToUTF8().data())
+            .SetDatabasePathUTF8(databasePath.GetFullPath().ToUTF8().data())
+            .SetMetricsDirUTF8(metricsDir.GetFullPath().ToUTF8().data())
+            .SetArguments(arguments)
+            .Start();
+      }
+      catch (std::exception& e)
+      {
+         wxLogError("Crashpad init error: %s", e.what());
+      }
+   }
+#endif
+#elif !defined(_DEBUG)// Do not capture crashes in debug builds
+#if defined(HAS_CRASH_REPORT)
+#if defined(wxUSE_ON_FATAL_EXCEPTION) && wxUSE_ON_FATAL_EXCEPTION
+   wxHandleFatalExceptions();
+#endif
+#endif
+#endif
+}
+
 }
 
 static bool gInited = false;
@@ -524,7 +566,6 @@ static void QuitAudacity(bool bForce)
 #ifdef EXPERIMENTAL_SCOREALIGN
    CloseScoreAlignDialog();
 #endif
-   CloseScreenshotTools();
 
    // Logger window is always destroyed on macOS,
    // on other platforms - it prevents the runloop
@@ -841,8 +882,8 @@ int main(int argc, char *argv[])
    // never be able to get rid of the messages entirely, but we should
    // look into what's causing them, so allow them to show in Debug
    // builds.
-   stdout = freopen("/dev/null", "w", stdout);
-   stderr = freopen("/dev/null", "w", stderr);
+   freopen("/dev/null", "w", stdout);
+   freopen("/dev/null", "w", stderr);
 
    return wxEntry(argc, argv);
 }
@@ -1181,16 +1222,7 @@ bool AudacityApp::Initialize(int& argc, wxChar** argv)
 {
    if(!PluginHost::IsHostProcess())
    {
-#if defined(USE_BREAKPAD)
-      InitBreakpad();
-      // Do not capture crashes in debug builds
-#elif !defined(_DEBUG)
-#if defined(HAS_CRASH_REPORT)
-#if defined(wxUSE_ON_FATAL_EXCEPTION) && wxUSE_ON_FATAL_EXCEPTION
-      wxHandleFatalExceptions();
-#endif
-#endif
-#endif
+      InitCrashreports();
    }
    return wxApp::Initialize(argc, argv);
 }
@@ -1209,10 +1241,17 @@ AudacityApp::~AudacityApp()
 // Some of the many initialization steps
 void AudacityApp::OnInit0()
 {
-   // Inject basic GUI services behind the facade
+   // Inject basic GUI services behind the facades
    {
       static wxWidgetsBasicUI uiServices;
       (void)BasicUI::Install(&uiServices);
+
+      static WindowPlacementFactory::Scope scope {
+      [](AudacityProject &project)
+         -> std::unique_ptr<BasicUI::WindowPlacement> {
+         return std::make_unique<wxWidgetsWindowPlacement>(
+            &GetProjectFrame(project));
+      } };
    }
 
    // Fire up SQLite

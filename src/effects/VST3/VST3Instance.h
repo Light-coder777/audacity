@@ -2,7 +2,7 @@
 
 #include <public.sdk/source/vst/utility/uid.h>
 
-#include "effects/PerTrackEffect.h"
+#include "PerTrackEffect.h"
 
 namespace Steinberg
 {
@@ -17,6 +17,7 @@ namespace VST3
 {
    namespace Hosting
    {
+      class ClassInfo;
       class Module;
    }
 }
@@ -27,8 +28,6 @@ class VST3Effect;
 class VST3Instance
    : public PerTrackEffect::Instance
 {
-   VST3::UID mEffectUID;
-
    std::unique_ptr<VST3Wrapper> mWrapper;
 
    size_t mUserBlockSize { 8192 };
@@ -40,14 +39,13 @@ class VST3Instance
    std::vector<std::unique_ptr<VST3Instance>> mProcessors;
 
 public:
-   VST3Instance(const PerTrackEffect& effect, VST3::Hosting::Module& module, VST3::UID effectUID);
+   VST3Instance(const PerTrackEffect& effect, VST3::Hosting::Module& module, const VST3::Hosting::ClassInfo& effectClassInfo);
    ~VST3Instance() override;
 
    VST3Instance(const VST3Instance&) = delete;
    VST3Instance& operator=(const VST3Instance&) = delete;
 
    size_t GetTailSize() const override;
-   bool Init() override;
    bool RealtimeAddProcessor(EffectSettings& settings, EffectOutputs *pOutputs,
       unsigned numChannels, float sampleRate) override;
    bool RealtimeFinalize(EffectSettings& settings) noexcept override;

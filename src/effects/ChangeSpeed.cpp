@@ -15,26 +15,26 @@
 
 
 #include "ChangeSpeed.h"
+#include "EffectEditor.h"
 #include "LoadEffects.h"
 
 #include <math.h>
 
 #include <wx/choice.h>
-#include <wx/intl.h>
 #include <wx/slider.h>
 
 #include "ConfigInterface.h"
 #include "../LabelTrack.h"
 #include "Prefs.h"
 #include "Resample.h"
-#include "../ShuttleGui.h"
-#include "../SyncLock.h"
+#include "ShuttleGui.h"
+#include "SyncLock.h"
 #include "../widgets/NumericTextCtrl.h"
 #include "../widgets/valnum.h"
 
 #include "TimeWarper.h"
-#include "../WaveClip.h"
-#include "../WaveTrack.h"
+#include "WaveClip.h"
+#include "WaveTrack.h"
 
 enum
 {
@@ -238,10 +238,12 @@ bool EffectChangeSpeed::Process(EffectInstance &, EffectSettings &)
    return bGoodResult;
 }
 
-std::unique_ptr<EffectUIValidator> EffectChangeSpeed::PopulateOrExchange(
+std::unique_ptr<EffectEditor> EffectChangeSpeed::PopulateOrExchange(
    ShuttleGui & S, EffectInstance &, EffectSettingsAccess &,
    const EffectOutputs *)
 {
+   mUIParent = S.GetParent();
+
    {
       wxString formatId;
       GetConfig(GetDefinition(), PluginSettings::Private,
@@ -783,5 +785,6 @@ void EffectChangeSpeed::Update_TimeCtrl_ToLength()
 void EffectChangeSpeed::UpdateUI()
 // Disable OK and Preview if not in sensible range.
 {
-   EnableApply(m_PercentChange >= Percentage.min && m_PercentChange <= Percentage.max);
+   EffectEditor::EnableApply(mUIParent,
+      m_PercentChange >= Percentage.min && m_PercentChange <= Percentage.max);
 }

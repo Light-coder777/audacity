@@ -31,14 +31,13 @@ other settings.
 #include <wx/defs.h>
 
 #include <wx/choice.h>
-#include <wx/intl.h>
 #include <wx/log.h>
 #include <wx/textctrl.h>
 
 #include "portaudio.h"
 
 #include "Prefs.h"
-#include "../ShuttleGui.h"
+#include "ShuttleGui.h"
 #include "DeviceManager.h"
 
 enum {

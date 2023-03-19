@@ -44,11 +44,8 @@
 #include <wx/setup.h> // for wxUSE_* macros
 #include <wx/wxcrtvararg.h>
 #include <wx/defs.h>
-#include <wx/dialog.h>
 #include <wx/dcbuffer.h>
 #include <wx/frame.h>
-#include <wx/image.h>
-#include <wx/intl.h>
 #include <wx/menu.h>
 #include <wx/settings.h>
 #include <wx/textdlg.h>
@@ -58,19 +55,23 @@
 
 #include <math.h>
 
-#include "../AudioIO.h"
+#include "AudioIO.h"
 #include "AColor.h"
 #include "../widgets/BasicMenu.h"
 #include "ImageManipulation.h"
 #include "Decibels.h"
+#include "LinearUpdater.h"
 #include "Project.h"
-#include "../ProjectAudioManager.h"
+#include "ProjectAudioIO.h"
 #include "ProjectStatus.h"
 #include "../ProjectWindows.h"
 #include "Prefs.h"
-#include "../ShuttleGui.h"
+#include "ShuttleGui.h"
 #include "Theme.h"
-#include "../widgets/wxWidgetsWindowPlacement.h"
+#include "wxWidgetsWindowPlacement.h"
+#include "../widgets/LinearUpdater.h"
+#include "../widgets/LinearDBFormat.h"
+#include "../widgets/RealFormat.h"
 
 #include "AllThemeResources.h"
 #include "../widgets/valnum.h"
@@ -316,7 +317,8 @@ MeterPanel::MeterPanel(AudacityProject *project,
    mActive(false),
    mNumBars(0),
    mLayoutValid(false),
-   mBitmap{}
+   mBitmap{},
+   mRuler{ LinearUpdater::Instance(), LinearDBFormat::Instance() }
 {
    // i18n-hint: Noun (the meter is used for playback or record level monitoring)
    SetName( XO("Meter") );
@@ -1216,7 +1218,7 @@ void MeterPanel::SetActiveStyle(Style newStyle)
 
    if (mDB)
    {
-      mRuler.SetFormat(Ruler::LinearDBFormat);
+      mRuler.SetFormat(&LinearDBFormat::Instance());
       if (mStyle == HorizontalStereo || mStyle == HorizontalStereoCompact)
       {
          mRuler.SetOrientation(wxHORIZONTAL);
@@ -1230,7 +1232,7 @@ void MeterPanel::SetActiveStyle(Style newStyle)
    }
    else
    {
-      mRuler.SetFormat(Ruler::RealFormat);
+      mRuler.SetFormat(&RealFormat::LinearInstance());
       if (mStyle == HorizontalStereo || mStyle == HorizontalStereoCompact)
       {
          mRuler.SetOrientation(wxHORIZONTAL);
@@ -1869,9 +1871,8 @@ void MeterPanel::StartMonitoring()
 
    if (start && !gAudioIO->IsBusy()){
       AudacityProject *p = mProject;
-      if (p){
-         gAudioIO->StartMonitoring( DefaultPlayOptions( *p ) );
-      }
+      if (p)
+         gAudioIO->StartMonitoring(ProjectAudioIO::GetDefaultOptions(*p));
 
       mLayoutValid = false;
 

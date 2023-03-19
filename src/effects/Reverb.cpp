@@ -13,19 +13,17 @@
 \brief A reverberation effect
 
 *//*******************************************************************/
-
-
 #include "Reverb.h"
+#include "EffectEditor.h"
 #include "LoadEffects.h"
 
 #include <wx/arrstr.h>
 #include <wx/checkbox.h>
-#include <wx/intl.h>
 #include <wx/slider.h>
 #include <wx/spinctrl.h>
 
 #include "Prefs.h"
-#include "../ShuttleGui.h"
+#include "ShuttleGui.h"
 #include "../widgets/valnum.h"
 
 #include "Reverb_libSoX.h"
@@ -93,17 +91,15 @@ const ComponentInterfaceSymbol EffectReverb::Symbol
 namespace{ BuiltinEffectsModule::Registration< EffectReverb > reg; }
 
 
-struct EffectReverb::Validator
-   : EffectUIValidator
+struct EffectReverb::Editor
+   : EffectEditor
 {
-   Validator(EffectUIClientInterface& effect,
-      EffectSettingsAccess& access, const EffectReverbSettings& settings)
-      : EffectUIValidator{ effect, access }
+   Editor(const EffectUIServices& services,
+      EffectSettingsAccess& access, const EffectReverbSettings& settings
+   )  : EffectEditor{ services, access }
       , mSettings{ settings }
    {}
-   virtual ~Validator() = default;
-
-   Effect& GetEffect() const { return static_cast<Effect&>(mEffect); }
+   virtual ~Editor() = default;
 
    bool ValidateUI() override;
    bool UpdateUI() override;
@@ -154,7 +150,7 @@ struct EffectReverb::Validator
 };
 
 
-bool EffectReverb::Validator::ValidateUI()
+bool EffectReverb::Editor::ValidateUI()
 {
    auto& rs = mSettings;
 
@@ -241,15 +237,27 @@ struct EffectReverb::Instance
       const auto& incomingSettings = GetSettings(settings);
       if ( !(incomingSettings == mLastAppliedSettings) )
       {
+         const bool onlySimpleOnes = OnlySimpleParametersChanged(incomingSettings, mLastAppliedSettings);
+
          for (auto& slave : mSlaves)
          {
             for (unsigned int i = 0; i < slave.mState.mNumChans; i++)
             {
                auto& reverbCore = slave.mState.mP[i].reverb;
                const auto& is = incomingSettings;
-               reverb_init(&reverbCore, mLastSampleRate,
-                           is.mWetGain, is.mRoomSize, is.mReverberance, is.mHfDamping,
-                           is.mPreDelay, is.mStereoWidth, is.mToneLow, is.mToneHigh   );
+
+               if (onlySimpleOnes)
+               {
+                  reverb_set_simple_params(&reverbCore, mLastSampleRate,
+                                           is.mWetGain, is.mReverberance, is.mHfDamping, is.mToneLow, is.mToneHigh);
+               }
+               else
+               {
+                  // One of the non-simple parameters changed, so we need to do a full reinit
+                  reverb_init(&reverbCore, mLastSampleRate,
+                              is.mWetGain, is.mRoomSize, is.mReverberance, is.mHfDamping,
+                              is.mPreDelay, is.mStereoWidth, is.mToneLow, is.mToneHigh   );
+               }
             }
          }         
 
@@ -501,20 +509,20 @@ EffectReverb::LoadFactoryPreset(int id, EffectSettings& settings) const
 }
 
 // Effect implementation
-std::unique_ptr<EffectUIValidator> EffectReverb::PopulateOrExchange(
+std::unique_ptr<EffectEditor> EffectReverb::MakeEditor(
    ShuttleGui& S, EffectInstance&, EffectSettingsAccess& access,
-   const EffectOutputs *)
+   const EffectOutputs *) const
 {
    auto& settings = access.Get();
    auto& myEffSettings = GetSettings(settings);
 
-   auto result = std::make_unique<Validator>(*this, access, myEffSettings);
+   auto result = std::make_unique<Editor>(*this, access, myEffSettings);
    result->PopulateOrExchange(S);
    return result;
 }
 
 
-void EffectReverb::Validator::PopulateOrExchange(ShuttleGui & S)
+void EffectReverb::Editor::PopulateOrExchange(ShuttleGui & S)
 {
    S.AddSpace(0, 5);
 
@@ -524,10 +532,10 @@ void EffectReverb::Validator::PopulateOrExchange(ShuttleGui & S)
 
 #define SpinSlider(n, p) \
       m ## n ## T = S.AddSpinCtrl( p, n.def, n.max, n.min); \
-      BindTo(*m ## n ## T, wxEVT_SPINCTRL, &Validator::On ## n ## Text);\
+      BindTo(*m ## n ## T, wxEVT_SPINCTRL, &Editor::On ## n ## Text);\
       \
       m ## n ## S = S.Style(wxSL_HORIZONTAL).AddSlider( {}, n.def, n.max, n.min); \
-      BindTo(*m ## n ## S, wxEVT_SLIDER, &Validator::On ## n ## Slider);
+      BindTo(*m ## n ## S, wxEVT_SLIDER, &Editor::On ## n ## Slider);
 
       SpinSlider(RoomSize,       XXO("&Room Size (%):"))
       SpinSlider(PreDelay,       XXO("&Pre-delay (ms):"))
@@ -548,13 +556,13 @@ void EffectReverb::Validator::PopulateOrExchange(ShuttleGui & S)
    {
       mWetOnlyC =
       S.AddCheckBox(XXO("Wet O&nly"), WetOnly.def);
-      BindTo(*mWetOnlyC, wxEVT_CHECKBOX, &Validator::OnCheckbox);
+      BindTo(*mWetOnlyC, wxEVT_CHECKBOX, &Editor::OnCheckbox);
    }
    S.EndHorizontalLay();
 
 }
 
-bool EffectReverb::Validator::UpdateUI()
+bool EffectReverb::Editor::UpdateUI()
 {
    // get the settings from the MessageBuffer and write them to our local copy
    mSettings = GetSettings(mAccess.Get());
@@ -584,21 +592,23 @@ bool EffectReverb::Validator::UpdateUI()
 
 
 #define SpinSliderHandlers(n) \
-   void EffectReverb::Validator::On ## n ## Slider(wxCommandEvent & evt) \
+   void EffectReverb::Editor::On ## n ## Slider(wxCommandEvent & evt) \
    { \
       if (mProcessingEvent) return; \
       mProcessingEvent = true; \
       m ## n ## T->SetValue(wxString::Format(wxT("%d"), evt.GetInt())); \
       mProcessingEvent = false; \
       ValidateUI(); \
+      Publish(EffectSettingChanged{}); \
    } \
-   void EffectReverb::Validator::On ## n ## Text(wxCommandEvent & evt) \
+   void EffectReverb::Editor::On ## n ## Text(wxCommandEvent & evt) \
    { \
       if (mProcessingEvent) return; \
       mProcessingEvent = true; \
       m ## n ## S->SetValue(std::clamp<long>(evt.GetInt(), n.min, n.max)); \
       mProcessingEvent = false; \
       ValidateUI(); \
+      Publish(EffectSettingChanged{}); \
    }
 
 SpinSliderHandlers(RoomSize)
@@ -611,9 +621,10 @@ SpinSliderHandlers(WetGain)
 SpinSliderHandlers(DryGain)
 SpinSliderHandlers(StereoWidth)
 
-void EffectReverb::Validator::OnCheckbox(wxCommandEvent &evt)
+void EffectReverb::Editor::OnCheckbox(wxCommandEvent &evt)
 {
    ValidateUI();
+   Publish(EffectSettingChanged{});
 }
 
 #undef SpinSliderHandlers
@@ -633,3 +644,27 @@ bool operator==(const EffectReverbSettings& a, const EffectReverbSettings& b)
             && (a.mWetOnly      == b.mWetOnly);           
 }
 
+bool OnlySimpleParametersChanged(const EffectReverbSettings& a, const EffectReverbSettings& b)
+{
+   // A "simple" reverb parameter is one that when changed, does not require the
+   // reverb allpass/comb filters to be reset. This distinction enables us to
+   // code things so that the user can keep hearing the processed sound while
+   // they tweak one of the simple parameters.
+
+   const bool oneSimpleParameterChanged =
+
+               (a.mReverberance != b.mReverberance)
+            || (a.mHfDamping    != b.mHfDamping)
+            || (a.mToneLow      != b.mToneLow)
+            || (a.mToneHigh     != b.mToneHigh)
+            || (a.mWetGain      != b.mWetGain);
+
+
+   const bool allNonSimpleParametersStayedTheSame =
+
+               (a.mRoomSize     == b.mRoomSize)
+            && (a.mPreDelay     == b.mPreDelay)
+            && (a.mStereoWidth  == b.mStereoWidth);           
+
+   return oneSimpleParameterChanged && allNonSimpleParametersStayedTheSame;
+}

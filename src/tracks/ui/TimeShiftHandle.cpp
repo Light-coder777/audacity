@@ -14,12 +14,12 @@ Paul Licameli split from TrackPanel.cpp
 #include "TrackView.h"
 #include "AColor.h"
 #include "../../HitTestResult.h"
-#include "../../ProjectAudioIO.h"
+#include "ProjectAudioIO.h"
 #include "ProjectHistory.h"
 #include "../../ProjectSettings.h"
 #include "../../RefreshCode.h"
 #include "../../Snap.h"
-#include "../../SyncLock.h"
+#include "SyncLock.h"
 #include "Track.h"
 #include "../../TrackArtist.h"
 #include "../../TrackPanelDrawingContext.h"
@@ -545,7 +545,7 @@ UIHandle::Result TimeShiftHandle::Click
       clickTime,
 
       viewInfo, trackList,
-      ProjectSettings::Get( *pProject ).IsSyncLocked() );
+      SyncLockState::Get( *pProject ).IsSyncLocked() );
 
    mSlideUpDownOnly = event.CmdDown() && !multiToolModeActive;
    mRect = rect;
